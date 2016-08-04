@@ -1,5 +1,6 @@
 const _ = require('lodash');
 const blessed = require('blessed');
+const pathfinding = require('pathfinding');
 
 const DUNGEON = `
 #########################################################################
@@ -57,27 +58,45 @@ const CELL = {
 
 const GAME_STATE = {
     PLAYING: 1,
-    WON: 2
+    STOPPED: 2
 }
 
-class Hero {
+class Being {
     constructor (game, position) {
         this.game = game;
         this.position = position;
-        this._direction = 'UP';
-        this.heroBox = blessed.box({
+        this.displayBox = blessed.box({
             width:  1,
             height: 1,
             top:    0,
-            left:   0,
-            style: {
-                fg: 'green'
-            }
+            left:   0
         });
+    }
+
+    get displayIcon () {
+        return '@';
+    }
+
+    display () {
+        this.displayBox.left = this.position.x;
+        this.displayBox.top = this.position.y;
+        this.displayBox.setContent(this.displayIcon);
+    }
+}
+
+class Hero extends Being {
+    constructor (game, position) {
+        super(game, position);
+        this._direction = 'UP';
+        this.displayBox.style.fg = 'green';
     }
 
     get direction () { return DIRECTION[this._direction]; }
     set direction (val) { this._direction = val.toUpperCase(); }
+
+    get displayIcon () {
+        return this.direction.icon;
+    }
 
     changeDirection (newDirection) {
         this.direction = newDirection;
@@ -88,11 +107,29 @@ class Hero {
             this.position = this.position.add(this.direction.cell);
         }
     }
+}
 
-    display () {
-        this.heroBox.left = this.position.x;
-        this.heroBox.top = this.position.y;
-        this.heroBox.setContent(this.direction.icon);
+class Troll extends Being {
+    constructor (game, position) {
+        super(game, position);
+        this.displayBox.style.fg = 'red';
+    }
+
+    get displayIcon () {
+        return 'T';
+    }
+
+    catchHero () {
+        let grid = new pathfinding.Grid(this.game.dungeon.walkableMatrix);
+        let finder = new pathfinding.AStarFinder();
+        let path = finder.findPath(this.position.x, this.position.y, this.game.hero.position.x, this.game.hero.position.y, grid);
+        if (path.length >= 1) {
+            this.position = new Cell(path[1][0], path[1][1]);
+
+            if (this.position.equals(this.game.hero.position)) {
+                this.game.lose();
+            }
+        }
     }
 }
 
@@ -132,11 +169,26 @@ class Dungeon {
         }
     }
 
+    cellIsEmpty (cell) {
+        let empty = this.cellIs(cell, CELL.EMPTY);
+        if (empty && this.game.hero) {
+            empty = !cell.equals(this.game.hero.position);
+        }
+        if (empty && this.game.trolls) {
+            empty = !_.some(this.game.trolls, t => cell.equals(t.position));
+        }
+        return empty;
+    }
+
+    get walkableMatrix () {
+        return _.map(this.map, (r, y) => _.map(r, (c, x) => this.cellIs(new Cell(x, y), CELL.EMPTY) ? 0 : 1));
+    }
+
     randomEmptyCell () {
         let cell;
         do {
             cell = this.randomCell();
-        } while (!this.cellIs(cell, CELL.EMPTY));
+        } while (!this.cellIsEmpty(cell));
         return cell;
     }
 
@@ -168,7 +220,7 @@ class Dungeon {
 }
 
 class Game {
-    constructor (dungeonMap) {
+    constructor (dungeonMap, numberTrolls = 0) {
         this.screen = blessed.screen({
             smartCSR: true
         });
@@ -179,52 +231,78 @@ class Game {
         this.hero = new Hero(this, this.dungeon.randomEmptyCell());
 
         this.screen.append(this.dungeon.dungeonBox);
-        this.screen.append(this.hero.heroBox);
+        this.screen.append(this.hero.displayBox);
+
+        // add trolls
+        this.trolls = [];
+        _.times(numberTrolls, () => {
+            let troll = new Troll(this, this.dungeon.randomEmptyCell());
+            this.trolls.push(troll);
+            this.screen.append(troll.displayBox);
+        });
 
         this.screen.key(['escape', 'q', 'C-c'], (ch, key) => {
           return process.exit(0);
         });
 
         this.screen.on('keypress', (key, ch) => {
-            if (this.state === GAME_STATE.WON) return;
+            if (this.state === GAME_STATE.STOPPED) return;
 
             if (_.includes(['up', 'down', 'left', 'right'], ch.name)) {
                 this.hero.changeDirection(ch.name);
-                this.display();
             }
 
             if (this.hero.position.equals(this.dungeon.exit)) {
-                this.dungeon.dungeonBox.append(blessed.box({
-                    top: 'center',
-                    left: 'center',
-                    width: '50%',
-                    height: '50%',
-                    content: '\n\n{center}{bold}YOU WON{/bold}!',
-                    tags: true,
-                    border: {
-                        type: 'line'
-                    },
-                    style: {
-                        fg: 'white',
-                        border: {
-                            fg: 'white'
-                        },
-                    }
-                }));
-
-                this.state = GAME_STATE.WON;
-                this.screen.render();
+                this.win();
             }
+
+            this.display();
         });
 
         this.display();
     }
 
+    alert (message) {
+        this.dungeon.dungeonBox.append(blessed.box({
+            top: 'center',
+            left: 'center',
+            width: '50%',
+            height: '50%',
+            content: `\n\n{center}{bold}${message}{/bold}!`,
+            tags: true,
+            border: {
+                type: 'line'
+            },
+            style: {
+                fg: 'white',
+                border: {
+                    fg: 'white'
+                },
+            }
+        }));
+
+        this.screen.render();
+    }
+
+    win () {
+        this.state = GAME_STATE.STOPPED
+        this.alert('YOU WIN');
+    }
+
+    lose () {
+        this.state = GAME_STATE.STOPPED
+        this.alert('YOU LOSE');
+    }
+
     display () {
         this.dungeon.display();
         this.hero.display();
+        _.each(this.trolls, t => {
+            t.catchHero();
+            t.display();
+        });
         this.screen.render();
     }
 }
 
-const game = new Game(DUNGEON);
+const game = new Game(DUNGEON, 5);
