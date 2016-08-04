@@ -81,8 +81,11 @@ class Hero {
 
     changeDirection (newDirection) {
         this.direction = newDirection;
-        if (this.game.dungeon.cellIs(this.position.add(this.direction.cell), [CELL.EMPTY, CELL.EXIT])) {
-             this.position = this.position.add(this.direction.cell);
+        const newPosition = this.position.add(this.direction.cell);
+        if (this.game.dungeon.cellIs(newPosition, [CELL.EMPTY, CELL.EXIT])) {
+             this.position = newPosition;
+        } else if (this.game.dungeon.pushCell(newPosition, this.direction.cell)) {
+            this.position = this.position.add(this.direction.cell);
         }
     }
 
@@ -99,12 +102,12 @@ class Dungeon {
 
         const rawMap = map.split('\n').filter(r => r.trim() !== '').join('\n');
 
-        this.dungeon = rawMap.split('\n').map(r => r.split(''));
-        this.width = this.dungeon[0].length;
-        this.height = this.dungeon.length;
+        this.map = rawMap.split('\n').map(r => r.split(''));
+        this.width = this.map[0].length;
+        this.height = this.map.length;
         this.exit = (() => {
-            let y = _.findIndex(this.dungeon, r => _.includes(r, CELL.EXIT));
-            let x = _.findIndex(this.dungeon[y], c => c === CELL.EXIT);
+            let y = _.findIndex(this.map, r => _.includes(r, CELL.EXIT));
+            let x = _.findIndex(this.map[y], c => c === CELL.EXIT);
             return new Cell(x, y);
         })();
 
@@ -121,8 +124,12 @@ class Dungeon {
     }
 
     cellIs (cell, types) {
-        if (!_.isArray(types)) types = [types];
-        return _.some(types, t => this.dungeon[cell.y][cell.x] === t);
+        try {
+            if (!_.isArray(types)) types = [types];
+            return _.some(types, t => this.map[cell.y][cell.x] === t);
+        } catch (e) {
+            return false;
+        }
     }
 
     randomEmptyCell () {
@@ -136,7 +143,7 @@ class Dungeon {
     display () {
         let content = '';
 
-        _.each(this.dungeon, (row, y) => {
+        _.each(this.map, (row, y) => {
             _.each(row, (cell, x) => {
                 content += cell;
             });
@@ -144,6 +151,19 @@ class Dungeon {
         })
 
         this.dungeonBox.setContent(content);
+    }
+
+    pushCell (cell, direction) {
+        if (!this.cellIs(cell, CELL.WALL)) return false;
+
+        const pushToCell = cell.add(direction);
+        if (this.cellIs(pushToCell, CELL.EMPTY)) {
+            this.map[cell.y][cell.x] = CELL.EMPTY;
+            this.map[pushToCell.y][pushToCell.x] = CELL.WALL;
+            return true;
+        } else {
+            return false;
+        }
     }
 }
 
